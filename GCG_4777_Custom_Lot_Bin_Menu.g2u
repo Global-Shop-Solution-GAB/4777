@@ -1,0 +1,175 @@
+'Project built by Kendrick C. on 9/29/2017 for Vantage Products.
+'The default Lot/Bin button in Supply & Demand fails to load data if the dataset for the selected item is >16MB. This project re-creates the same screen
+'But does not have the size limitation on the data set it loads.
+'Hooks into 14045 to change Script 1 to say Alternate Lot/Bin
+'Hooks into 14070, Inventory > Inventory > View > Supply and Demand > Script 1 to create custom Lot/Bin menu.
+
+Program.Sub.ScreenSU.Start
+Gui.F_LBRecords..Create
+Gui.F_LBRecords..Caption("View Lot/Bin Records")
+Gui.F_LBRecords..Size(20850,12180)
+Gui.F_LBRecords..MinX(0)
+Gui.F_LBRecords..MinY(0)
+Gui.F_LBRecords..Position(0,0)
+Gui.F_LBRecords..BackColor(-2147483633)
+Gui.F_LBRecords..MousePointer(0)
+Gui.F_LBRecords..Event(UnLoad,F_LBRecords_UnLoad)
+Gui.F_LBRecords..Sizeable(False)
+Gui.F_LBRecords.txtPart.Create(TextBox,"",True,2340,300,0,1620,600,False,0,"Arial",8,-2147483643,1)
+Gui.F_LBRecords.lbl1.Create(Label,"Part Number",True,1020,255,0,1590,375,True,0,"Arial",8,-2147483633,0)
+Gui.F_LBRecords.lbl2.Create(Label,"Rev",True,435,255,0,4125,375,True,0,"Arial",8,-2147483633,0)
+Gui.F_LBRecords.lbl3.Create(Label,"Loc",True,450,255,0,4905,375,True,0,"Arial",8,-2147483633,0)
+Gui.F_LBRecords.txtRev.Create(TextBox,"",True,585,300,0,4155,600,False,0,"Arial",8,-2147483643,1)
+Gui.F_LBRecords.txtLoc.Create(TextBox,"",True,360,300,0,4935,600,False,0,"Arial",8,-2147483643,1)
+Gui.F_LBRecords.txtPartDescription.Create(TextBox,"",True,3285,300,0,5520,600,False,0,"Arial",8,-2147483643,1)
+Gui.F_LBRecords.lbl4.Create(Label,"Part Description",True,1320,255,0,5490,375,True,0,"Arial",8,-2147483633,0)
+Gui.F_LBRecords.gsgcLBRecords.Create(GsGridControl)
+Gui.F_LBRecords.gsgcLBRecords.Size(19800,10080)
+Gui.F_LBRecords.gsgcLBRecords.Position(480,1230)
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+V.Global.sError.Declare(String)
+V.Global.sPartNumber.Declare(String)
+V.Global.sLoc.Declare(String)
+V.Global.sPartDescription.Declare(String)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.Try
+	'14045 hook is called when populating Supply and Demand. This Script 1 to Lot/Bin 
+	F.Intrinsic.Control.If(V.Caller.Hook,=,"14045")
+		Variable.passed.000252.Set("Alternate Lot/Bin")
+		
+	'14070 hook is called when Script 1 is clicked. 
+	F.Intrinsic.Control.ElseIf(V.Caller.Hook,=,"14070")
+		V.Global.sPartNumber.Set(V.Passed.000003)
+		V.Global.sLoc.Set(V.Passed.000004)
+		V.Global.sPartDescription.Set(V.Passed.000006)
+		
+		F.ODBC.Connection!con.OpenConnection(V.Ambient.PDSN, V.Ambient.PUser, V.Ambient.PPass)
+		
+		'Verify that a part number is selected from Supply and Demand Screen. If not, exit.
+		F.Intrinsic.Control.If(V.Global.sPartNumber.Trim,=,"")
+			F.Intrinsic.UI.Msgbox("No Part Number Entered.", "Missing Part Number")
+			F.Intrinsic.Control.CallSub(F_LBRecords_UnLoad)
+			
+		F.Intrinsic.Control.Else
+			'Pad part number to 20 chars for rev in case rev is not set up
+			F.Intrinsic.String.RPad(V.Global.sPartNumber," ",20, V.Global.sPartNumber)
+			
+			'Set up txt boxes at top of screen
+			Gui.F_LBRecords.txtPart.Text(V.Global.sPartNumber.Left17)
+			Gui.F_LBRecords.txtRev.Text(V.Global.sPartNumber.Right3)
+			Gui.F_LBRecords.txtLoc.Text(V.Global.sLoc)
+			Gui.F_LBRecords.txtPartDescription.Text(V.Global.sPartDescription)
+		
+			'Call function to populate datatable from SQL
+			F.Intrinsic.Control.CallSub(PopulateData)
+			
+			'Configure and fill gsgc
+			F.Intrinsic.Control.CallSub(CreateGrid)
+			
+			'Display Form
+			Gui.F_LBRecords..Show
+			
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.EndIf
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "ErrNo", V.Ambient.ErrorNumber, "ErrDesc", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.PopulateData.Start
+F.Intrinsic.Control.Try
+	V.Local.sSQL.Declare(String)
+	'Query to pull data for the grid. There are two fields in the original that I could not find in V_ITEM_MASTER but this should be enough to properly test the issue
+	F.Intrinsic.String.Build("SELECT Item.Lot, Item.Serial_Number, Item.Heat, Item.Bin, Item.Quantity, Item.Qty_Available_Ship, (Item.Quantity*Inv.Factor_Conversion) AS Pur_Qty_On_Hand, Item.User_Field_1, Item.User_Field_2, Item.User_Field_3, Item.User_Field_4, Item.User_Field_5, Item.User_Field_6, Item.User_Field_7, Item.User_Field_8, Item.User_Field_9 FROM V_Item_Master AS Item LEFT JOIN V_Inventory_Mstr AS Inv ON Item.Part = Inv.Part AND Item.Location = Inv.Location WHERE Item.Part = '{0}' AND Item.Location = '{1}'", V.Global.sPartNumber, V.Global.sLoc, V.Local.sSQL)
+	
+	'Creating the DataTable that will be used to fill the grid from SQL query. True marks it as a global DataTable.
+	F.Data.DataTable.CreateFromSQL("LBRecords", "con", V.Local.sSQL, True)
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "ErrNo", V.Ambient.ErrorNumber, "ErrDesc", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.PopulateData.End
+
+Program.Sub.CreateGrid.Start
+F.Intrinsic.Control.Try
+	'Create a DataView from the DataTable created in PopulateData
+	F.Data.DataView.Create("LBRecords", "LBRecordsView", 22)
+	
+	'Create Gridview from the DataView for the gsgc in the view
+	Gui.F_LBRecords.gsgcLBRecords.AddGridviewFromDataview("LBRecordsGrid", "LBRecords", "LBRecordsView")
+	'Assign Column Names
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Lot", "Caption", "Lot Number")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Bin", "Caption", "Bin Number")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Heat", "Caption", "Heat Number")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Serial_Number", "Caption", "Serial Number")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Quantity", "Caption", "Inv Qty On Hand")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Qty_Available_Ship", "Caption", "Inv Qty Avail to Ship")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Pur_Qty_On_Hand", "Caption", "Pur Qty On Hand")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_1", "Caption", "Order #")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_2", "Caption", "Sale Price")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_3", "Caption", "Store Date")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_4", "Caption", "Status")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_5", "Caption", "Invoice #")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_6", "Caption", "User 6")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_7", "Caption", "Ship Order #")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_8", "Caption", "Ship Date")
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_9", "Caption", "Reason")
+	
+	'Set Column Widths
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Lot", "MinWidth", 100)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Bin", "MinWidth", 70)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Heat", "MinWidth", 80)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Serial_Number", "MinWidth", 100)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Quantity", "MinWidth", 100)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "Qty_Available_Ship", "MinWidth", 100)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_1", "MinWidth", 60)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_2", "MinWidth", 60)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_3", "MinWidth", 60)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_4", "MinWidth", 60)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_5", "MinWidth", 60)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_6", "MinWidth", 60)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_7", "MinWidth", 60)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_8", "MinWidth", 60)
+	Gui.F_LBRecords.gsgcLBRecords.SetColumnProperty("LBRecordsGrid", "User_Field_9", "MinWidth", 60)
+	
+	'Make alternating rows darker
+	Gui.F_LBRecords.gsgcLBRecords.SetGridviewProperty("LBRecordsGrid","Enableappearanceoddrow","True")
+	
+	'Set Gridview as main grid for the gsgc
+	Gui.F_LBRecords.gsgcLBRecords.MainView("LBRecordsGrid")
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "ErrNo", V.Ambient.ErrorNumber, "ErrDesc", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.CreateGrid.End
+
+Program.Sub.F_LBRecords_UnLoad.Start
+F.Intrinsic.Control.Try
+	F.ODBC.Connection!con.Close
+	F.Intrinsic.Control.End
+	
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(CatchError, "Sub", V.Ambient.CurrentSubroutine, "ErrNo", V.Ambient.ErrorNumber, "ErrDesc", V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.F_LBRecords_UnLoad.End
+
+Program.Sub.CatchError.Start
+F.Intrinsic.String.Build("GCG_4776_Custom_Lot_Bin_Menu.g2u{0}{0} Subroutine: {1}{0} Error {2} occured with description: {3}", V.Ambient.NewLine, V.Args.Sub, V.Args.ErrNo, V.Args.ErrDesc, V.Global.sError)
+F.Intrinsic.UI.Msgbox(V.Global.sError)
+F.Intrinsic.Control.If(V.Args.Sub,<>,"F_LBRECORDS_UNLOAD")
+	F.Intrinsic.Control.CallSub(F_LBRecords_UnLoad)
+	
+F.Intrinsic.Control.Else
+	F.Intrinsic.Control.End
+
+F.Intrinsic.Control.Endif
+Program.Sub.CatchError.End
+
+Program.Sub.Comments.Start
+${$0$}$$}$$}$12:00:00 AM$}$False
+Program.Sub.Comments.End
